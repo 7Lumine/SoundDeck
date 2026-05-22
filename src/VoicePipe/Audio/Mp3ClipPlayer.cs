@@ -12,6 +12,8 @@ public sealed class Mp3ClipPlayer : IDisposable
     public bool IsPlaying { get; private set; }
     public bool Loop { get; private set; }
     public int SampleRate { get; private set; } = 48_000;
+    public int OriginalSampleRate { get; private set; }
+    public int OriginalChannels { get; private set; }
     public TimeSpan Position
     {
         get
@@ -41,6 +43,8 @@ public sealed class Mp3ClipPlayer : IDisposable
             DisposeReader();
 
             _reader = new AudioFileReader(path);
+            OriginalSampleRate = _reader.WaveFormat.SampleRate;
+            OriginalChannels = _reader.WaveFormat.Channels;
             _provider = CreateProvider(_reader, targetSampleRate);
             SampleRate = targetSampleRate;
             Loop = loop;
@@ -125,15 +129,17 @@ public sealed class Mp3ClipPlayer : IDisposable
     {
         ISampleProvider provider = reader;
 
-        if (provider.WaveFormat.Channels != 1)
-        {
-            provider = new DownmixToMonoSampleProvider(provider);
-        }
-
         if (provider.WaveFormat.SampleRate != targetSampleRate)
         {
             provider = new WdlResamplingSampleProvider(provider, targetSampleRate);
         }
+
+        provider = provider.WaveFormat.Channels switch
+        {
+            1 => new MonoToStereoSampleProvider(provider),
+            2 => provider,
+            _ => new DownmixToStereoSampleProvider(provider)
+        };
 
         return provider;
     }

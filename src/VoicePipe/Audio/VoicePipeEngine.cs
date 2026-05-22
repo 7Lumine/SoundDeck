@@ -1,28 +1,34 @@
+using System.Diagnostics;
+using System.IO;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace VoicePipe.Audio;
 
 public sealed class VoicePipeEngine : IDisposable
 {
-    private const int SampleRate = 48_000;
-    private const int BitsPerSample = 16;
-    private const int Channels = 1;
+    public const int SampleRate = 48_000;
+    private const int CaptureBitsPerSample = 16;
+    private const int CaptureChannels = 1;
+    private const int OutputChannels = 2;
     private const int BufferMilliseconds = 20;
 
-    private readonly WaveFormat _format = new(SampleRate, BitsPerSample, Channels);
+    private static readonly WaveFormat CaptureFormat = new(SampleRate, CaptureBitsPerSample, CaptureChannels);
+    private static readonly WaveFormat OutputPcmFormat = new(SampleRate, 16, OutputChannels);
+
     private readonly object _clipsGate = new();
     private readonly List<ActiveClipPlayback> _activeClips = new();
     private readonly object _monitorGate = new();
+    private readonly object _levelGate = new();
+    private readonly FloatRingBuffer _micRing = new(SampleRate * 2);
+
     private WaveInEvent? _microphone;
     private WaveOutEvent? _output;
-    private BufferedWaveProvider? _outputBuffer;
+    private SoundDeckMixerSampleProvider? _mainMixer;
     private WaveOutEvent? _monitorOutput;
     private BufferedWaveProvider? _monitorBuffer;
-    private float[] _mp3Buffer = Array.Empty<float>();
-    private float[] _clipReadBuffer = Array.Empty<float>();
-    private byte[] _mixBuffer = Array.Empty<byte>();
-    private byte[] _monitorMixBuffer = Array.Empty<byte>();
-    private readonly object _levelGate = new();
+    private float[] _captureSampleBuffer = Array.Empty<float>();
+    private byte[] _monitorByteBuffer = Array.Empty<byte>();
     private AudioLevels _levels;
     private MonitorMode _monitorMode;
     private int _monitorDeviceNumber = -1;
@@ -34,8 +40,11 @@ public sealed class VoicePipeEngine : IDisposable
     public float DuckingAmountDb { get; set; } = -12.0f;
     public bool MicMuted { get; set; }
     public bool DuckingEnabled { get; set; }
+    public int OutputLatencyMilliseconds { get; set; } = 200;
     public bool IsRunning => _microphone is not null && _output is not null;
+
     public event EventHandler<ClipPlaybackEndedEventArgs>? ClipPlaybackEnded;
+
     public int ActiveClipCount
     {
         get
@@ -50,30 +59,27 @@ public sealed class VoicePipeEngine : IDisposable
     public void Start(int inputDeviceNumber, int outputDeviceNumber)
     {
         Stop();
+        _micRing.Clear();
 
-        _outputBuffer = new BufferedWaveProvider(_format)
-        {
-            BufferDuration = TimeSpan.FromMilliseconds(500),
-            DiscardOnBufferOverflow = true
-        };
-
+        _mainMixer = new SoundDeckMixerSampleProvider(this, SampleRate);
         _output = new WaveOutEvent
         {
             DeviceNumber = outputDeviceNumber,
-            DesiredLatency = 80
+            DesiredLatency = NormalizeLatency(OutputLatencyMilliseconds)
         };
-        _output.Init(_outputBuffer);
+        _output.Init(new SampleToWaveProvider16(_mainMixer));
 
         _microphone = new WaveInEvent
         {
             DeviceNumber = inputDeviceNumber,
-            WaveFormat = _format,
+            WaveFormat = CaptureFormat,
             BufferMilliseconds = BufferMilliseconds,
-            NumberOfBuffers = 3
+            NumberOfBuffers = 4
         };
         _microphone.DataAvailable += Microphone_DataAvailable;
         _microphone.RecordingStopped += Microphone_RecordingStopped;
 
+        Log($"VC output start: device={outputDeviceNumber}, engine=WaveOutEvent, sampleRate={SampleRate}, channels={OutputChannels}, internal=float32, outputFormat={OutputPcmFormat}, latencyMs={_output.DesiredLatency}, continuousStream=true, mixerReadFully=true");
         _output.Play();
         StartMonitorIfNeeded();
         _microphone.StartRecording();
@@ -93,9 +99,11 @@ public sealed class VoicePipeEngine : IDisposable
         _output?.Stop();
         _output?.Dispose();
         _output = null;
-        _outputBuffer = null;
+        _mainMixer = null;
+        _micRing.Clear();
         StopMonitorOutput();
         SetLevels(0, 0, 0);
+        Log("VC output stop");
     }
 
     public void ConfigureMonitor(MonitorMode mode, int deviceNumber, float volume)
@@ -115,7 +123,7 @@ public sealed class VoicePipeEngine : IDisposable
                 return;
             }
 
-            if (_outputBuffer is not null && (shouldRestart || wasDisabled || _monitorOutput is null))
+            if (_output is not null && (shouldRestart || wasDisabled || _monitorOutput is null))
             {
                 StopMonitorOutputLocked();
                 StartMonitorOutputLocked();
@@ -132,6 +140,7 @@ public sealed class VoicePipeEngine : IDisposable
         lock (_clipsGate)
         {
             _activeClips.Add(playback);
+            Log($"Clip start: id={playback.Id}, file={Path.GetFileName(path)}, original={player.OriginalSampleRate}Hz/{player.OriginalChannels}ch, resampled={SampleRate}Hz/{OutputChannels}ch, activeInputs={_activeClips.Count}");
         }
 
         return playback.Id;
@@ -150,6 +159,7 @@ public sealed class VoicePipeEngine : IDisposable
 
             _activeClips.Remove(playback);
             stoppedPlayback = playback;
+            Log($"Clip stop: id={playbackId}, activeInputs={_activeClips.Count}, vcOutputRecreated=false");
         }
 
         stoppedPlayback.Dispose();
@@ -163,6 +173,7 @@ public sealed class VoicePipeEngine : IDisposable
         {
             stoppedPlaybacks = _activeClips.ToList();
             _activeClips.Clear();
+            Log($"All clips stop: count={stoppedPlaybacks.Count}, vcOutputRecreated=false");
         }
 
         foreach (var playback in stoppedPlaybacks)
@@ -224,104 +235,24 @@ public sealed class VoicePipeEngine : IDisposable
         }
     }
 
-    private void Microphone_DataAvailable(object? sender, WaveInEventArgs e)
+    public static async Task RunDiagnosticToneAsync(int outputDeviceNumber, int latencyMilliseconds, CancellationToken cancellationToken = default)
     {
-        if (_outputBuffer is null)
-        {
-            return;
-        }
-
-        var sampleCount = e.BytesRecorded / 2;
-        EnsureBuffers(sampleCount);
-        MixActiveClips(sampleCount);
-
-        var micTrimGain = DbToLinear(MicInputTrimDb);
-        var micBaseGain = MicMuted ? 0.0f : ClampGain(MicVolume) * micTrimGain;
-        var micMixerGain = micBaseGain;
-        if (DuckingEnabled && ActiveClipCount > 0)
-        {
-            micMixerGain *= DbToLinear(DuckingAmountDb);
-        }
-
-        var mp3Gain = ClampGain(Mp3Volume);
-        var monitorMode = MonitorMode.None;
-        var monitorVolume = 0.0f;
-        BufferedWaveProvider? monitorBuffer = null;
-        lock (_monitorGate)
-        {
-            if (_monitorOutput is not null && _monitorBuffer is not null)
-            {
-                monitorMode = _monitorMode;
-                monitorVolume = _monitorVolume;
-                monitorBuffer = _monitorBuffer;
-            }
-        }
-
-        var micSumSquares = 0.0;
-        var clipsSumSquares = 0.0;
-        var outputSumSquares = 0.0;
-        var micPeak = 0.0;
-        var clipsPeak = 0.0;
-        var outputPeak = 0.0;
-
-        for (var sample = 0; sample < sampleCount; sample++)
-        {
-            var inputOffset = sample * 2;
-            var rawMicSample = BitConverter.ToInt16(e.Buffer, inputOffset) / 32768.0f;
-            var meteredMicSample = rawMicSample * micBaseGain;
-            var mixedMicSample = rawMicSample * micMixerGain;
-            var clipsSample = _mp3Buffer[sample] * mp3Gain;
-            var mixed = mixedMicSample + clipsSample;
-            mixed = SoftLimit(mixed);
-            var monitorSample = monitorMode switch
-            {
-                MonitorMode.Mp3Only => SoftLimit(clipsSample),
-                MonitorMode.Mixed => mixed,
-                _ => 0.0f
-            };
-            monitorSample = SoftLimit(monitorSample * monitorVolume);
-            micSumSquares += meteredMicSample * meteredMicSample;
-            clipsSumSquares += clipsSample * clipsSample;
-            outputSumSquares += mixed * mixed;
-            micPeak = Math.Max(micPeak, Math.Abs(meteredMicSample));
-            clipsPeak = Math.Max(clipsPeak, Math.Abs(clipsSample));
-            outputPeak = Math.Max(outputPeak, Math.Abs(mixed));
-
-            var outputSample = (short)Math.Clamp(
-                mixed * short.MaxValue,
-                short.MinValue,
-                short.MaxValue);
-
-            _mixBuffer[inputOffset] = (byte)(outputSample & 0xff);
-            _mixBuffer[inputOffset + 1] = (byte)((outputSample >> 8) & 0xff);
-
-            if (monitorBuffer is not null && monitorMode != MonitorMode.None)
-            {
-                var monitorOutputSample = (short)Math.Clamp(
-                    monitorSample * short.MaxValue,
-                    short.MinValue,
-                    short.MaxValue);
-
-                _monitorMixBuffer[inputOffset] = (byte)(monitorOutputSample & 0xff);
-                _monitorMixBuffer[inputOffset + 1] = (byte)((monitorOutputSample >> 8) & 0xff);
-            }
-        }
-
-        _outputBuffer.AddSamples(_mixBuffer, 0, sampleCount * 2);
-        if (monitorBuffer is not null && monitorMode != MonitorMode.None)
-        {
-            monitorBuffer.AddSamples(_monitorMixBuffer, 0, sampleCount * 2);
-        }
-
-        SetLevels(
-            CalculateMeterLevel(micSumSquares, micPeak, sampleCount),
-            CalculateMeterLevel(clipsSumSquares, clipsPeak, sampleCount),
-            CalculateMeterLevel(outputSumSquares, outputPeak, sampleCount));
+        await RunDiagnosticSignalAsync(outputDeviceNumber, latencyMilliseconds, tone: true, cancellationToken).ConfigureAwait(false);
     }
 
-    private void MixActiveClips(int sampleCount)
+    public static async Task RunDiagnosticSilenceAsync(int outputDeviceNumber, int latencyMilliseconds, CancellationToken cancellationToken = default)
     {
-        Array.Clear(_mp3Buffer, 0, sampleCount);
+        await RunDiagnosticSignalAsync(outputDeviceNumber, latencyMilliseconds, tone: false, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal int ReadMicSamples(float[] buffer, int offset, int count)
+    {
+        return _micRing.Read(buffer, offset, count);
+    }
+
+    internal void MixActiveClips(float[] destination, int offset, int count, float[] scratchBuffer)
+    {
+        Array.Clear(destination, offset, count);
         List<Guid>? endedPlaybackIds = null;
 
         lock (_clipsGate)
@@ -329,8 +260,8 @@ public sealed class VoicePipeEngine : IDisposable
             for (var index = _activeClips.Count - 1; index >= 0; index--)
             {
                 var playback = _activeClips[index];
-                Array.Clear(_clipReadBuffer, 0, sampleCount);
-                playback.Player.Read(_clipReadBuffer, 0, sampleCount);
+                Array.Clear(scratchBuffer, 0, count);
+                playback.Player.Read(scratchBuffer, 0, count);
 
                 if (!playback.IsPlaying)
                 {
@@ -338,11 +269,13 @@ public sealed class VoicePipeEngine : IDisposable
                     playback.Dispose();
                     endedPlaybackIds ??= new List<Guid>();
                     endedPlaybackIds.Add(playback.Id);
+                    Log($"Clip natural end: id={playback.Id}, activeInputs={_activeClips.Count}, vcOutputRecreated=false");
+                    continue;
                 }
 
-                for (var sample = 0; sample < sampleCount; sample++)
+                for (var sample = 0; sample < count; sample++)
                 {
-                    _mp3Buffer[sample] += _clipReadBuffer[sample] * playback.Volume;
+                    destination[offset + sample] += scratchBuffer[sample] * playback.Volume;
                 }
             }
         }
@@ -358,28 +291,64 @@ public sealed class VoicePipeEngine : IDisposable
         }
     }
 
-    private void EnsureBuffers(int sampleCount)
+    internal MonitorState GetMonitorState()
     {
-        if (_mp3Buffer.Length < sampleCount)
+        lock (_monitorGate)
         {
-            _mp3Buffer = new float[sampleCount];
+            return new MonitorState(_monitorMode, _monitorVolume, _monitorOutput is not null && _monitorBuffer is not null);
+        }
+    }
+
+    internal void WriteMonitorSamples(float[] samples, int offset, int count)
+    {
+        BufferedWaveProvider? monitorBuffer;
+        lock (_monitorGate)
+        {
+            monitorBuffer = _monitorBuffer;
         }
 
-        if (_clipReadBuffer.Length < sampleCount)
+        if (monitorBuffer is null)
         {
-            _clipReadBuffer = new float[sampleCount];
+            return;
         }
 
-        var byteCount = sampleCount * 2;
-        if (_mixBuffer.Length < byteCount)
+        var byteCount = count * 2;
+        if (_monitorByteBuffer.Length < byteCount)
         {
-            _mixBuffer = new byte[byteCount];
+            _monitorByteBuffer = new byte[byteCount];
         }
 
-        if (_monitorMixBuffer.Length < byteCount)
+        for (var sample = 0; sample < count; sample++)
         {
-            _monitorMixBuffer = new byte[byteCount];
+            var pcm = (short)Math.Clamp(samples[offset + sample] * short.MaxValue, short.MinValue, short.MaxValue);
+            var byteOffset = sample * 2;
+            _monitorByteBuffer[byteOffset] = (byte)(pcm & 0xff);
+            _monitorByteBuffer[byteOffset + 1] = (byte)((pcm >> 8) & 0xff);
         }
+
+        monitorBuffer.AddSamples(_monitorByteBuffer, 0, byteCount);
+    }
+
+    internal void SetLevelsFromAudioThread(double micLevel, double clipsLevel, double outputLevel)
+    {
+        SetLevels(micLevel, clipsLevel, outputLevel);
+    }
+
+    private void Microphone_DataAvailable(object? sender, WaveInEventArgs e)
+    {
+        var sampleCount = e.BytesRecorded / 2;
+        if (_captureSampleBuffer.Length < sampleCount)
+        {
+            _captureSampleBuffer = new float[sampleCount];
+        }
+
+        for (var sample = 0; sample < sampleCount; sample++)
+        {
+            var inputOffset = sample * 2;
+            _captureSampleBuffer[sample] = BitConverter.ToInt16(e.Buffer, inputOffset) / 32768.0f;
+        }
+
+        _micRing.Write(_captureSampleBuffer, 0, sampleCount);
     }
 
     private void StartMonitorIfNeeded()
@@ -400,7 +369,7 @@ public sealed class VoicePipeEngine : IDisposable
             return;
         }
 
-        _monitorBuffer = new BufferedWaveProvider(_format)
+        _monitorBuffer = new BufferedWaveProvider(OutputPcmFormat)
         {
             BufferDuration = TimeSpan.FromMilliseconds(500),
             DiscardOnBufferOverflow = true
@@ -409,10 +378,11 @@ public sealed class VoicePipeEngine : IDisposable
         _monitorOutput = new WaveOutEvent
         {
             DeviceNumber = _monitorDeviceNumber,
-            DesiredLatency = 80
+            DesiredLatency = 120
         };
         _monitorOutput.Init(_monitorBuffer);
         _monitorOutput.Play();
+        Log($"Monitor start: mode={_monitorMode}, device={_monitorDeviceNumber}, format={OutputPcmFormat}");
     }
 
     private void StopMonitorOutput()
@@ -431,11 +401,11 @@ public sealed class VoicePipeEngine : IDisposable
         _monitorBuffer = null;
     }
 
-    private static float ClampGain(float value) => Math.Clamp(value, 0.0f, 2.0f);
+    internal static float ClampGain(float value) => Math.Clamp(value, 0.0f, 2.0f);
 
-    private static float DbToLinear(float db) => MathF.Pow(10.0f, db / 20.0f);
+    internal static float DbToLinear(float db) => MathF.Pow(10.0f, db / 20.0f);
 
-    private static float SoftLimit(float sample)
+    internal static float SoftLimit(float sample)
     {
         if (sample is > -1.0f and < 1.0f)
         {
@@ -445,10 +415,22 @@ public sealed class VoicePipeEngine : IDisposable
         return MathF.Tanh(sample);
     }
 
+    internal static double CalculateMeterLevel(double sumSquares, double peak, int sampleCount)
+    {
+        if (sampleCount <= 0)
+        {
+            return 0;
+        }
+
+        var rms = Math.Sqrt(sumSquares / sampleCount);
+        return Math.Clamp(Math.Max(rms * 4.2, peak * 1.8), 0.0, 1.0);
+    }
+
     private void Microphone_RecordingStopped(object? sender, StoppedEventArgs e)
     {
         if (e.Exception is not null)
         {
+            Log($"Microphone stopped with error: {e.Exception.Message}");
             Stop();
         }
     }
@@ -469,15 +451,43 @@ public sealed class VoicePipeEngine : IDisposable
         }
     }
 
-    private static double CalculateMeterLevel(double sumSquares, double peak, int sampleCount)
+    private static int NormalizeLatency(int latencyMilliseconds)
     {
-        if (sampleCount <= 0)
-        {
-            return 0;
-        }
+        return latencyMilliseconds is 100 or 150 or 200 or 300
+            ? latencyMilliseconds
+            : 200;
+    }
 
-        var rms = Math.Sqrt(sumSquares / sampleCount);
-        return Math.Clamp(Math.Max(rms * 4.2, peak * 1.8), 0.0, 1.0);
+    private static async Task RunDiagnosticSignalAsync(int outputDeviceNumber, int latencyMilliseconds, bool tone, CancellationToken cancellationToken)
+    {
+        using var output = new WaveOutEvent
+        {
+            DeviceNumber = outputDeviceNumber,
+            DesiredLatency = NormalizeLatency(latencyMilliseconds)
+        };
+        var provider = new DiagnosticSignalSampleProvider(tone, SampleRate, OutputChannels);
+        output.Init(new SampleToWaveProvider16(provider));
+        Log($"Diagnostic {(tone ? "tone" : "silence")} start: device={outputDeviceNumber}, sampleRate={SampleRate}, channels={OutputChannels}, latencyMs={output.DesiredLatency}");
+        output.Play();
+        await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+        output.Stop();
+        Log($"Diagnostic {(tone ? "tone" : "silence")} stop");
+    }
+
+    private static void Log(string message)
+    {
+        try
+        {
+            var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SoundDeck");
+            Directory.CreateDirectory(directory);
+            var line = $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] {message}{Environment.NewLine}";
+            File.AppendAllText(Path.Combine(directory, "sounddeck.log"), line);
+            Debug.WriteLine(line);
+        }
+        catch
+        {
+            // Diagnostics must never interrupt audio routing.
+        }
     }
 
     public void Dispose()
@@ -485,4 +495,6 @@ public sealed class VoicePipeEngine : IDisposable
         Stop();
         StopAllMp3();
     }
+
+    internal readonly record struct MonitorState(MonitorMode Mode, float Volume, bool Enabled);
 }

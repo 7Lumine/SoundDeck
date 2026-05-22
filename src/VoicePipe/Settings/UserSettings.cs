@@ -16,5 +16,6 @@ public sealed class UserSettings
     public double MicMeterSensitivity { get; set; } = 1.0;
     public double ClipsMeterSensitivity { get; set; } = 1.0;
     public double OutputMeterSensitivity { get; set; } = 1.0;
+    public int VcOutputLatencyMilliseconds { get; set; } = 200;
     public List<ClipSettings> Clips { get; set; } = new();
 }

@@ -4,7 +4,7 @@
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="設定"
         Width="430"
-        MinHeight="360"
+        MinHeight="440"
         SizeToContent="Height"
         ResizeMode="NoResize"
         WindowStyle="None"
@@ -55,6 +55,8 @@
 
       <Grid Grid.Row="1" Margin="20">
         <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
           <RowDefinition Height="Auto"/>
@@ -129,12 +131,54 @@
           </StackPanel>
         </Border>
 
-        <TextBlock Grid.Row="1"
-                   Text="感度はメーター表示だけに反映され、実際の音量やVC出力には影響しません。"
+        <Border Grid.Row="1"
+                Style="{StaticResource ElevatedPanel}"
+                Padding="14"
+                Margin="0,0,0,16">
+          <StackPanel>
+            <TextBlock Text="VC出力" Style="{StaticResource PanelTitle}" Margin="0,0,0,10"/>
+            <DockPanel>
+              <TextBlock Text="レイテンシ"
+                         VerticalAlignment="Center"/>
+              <ComboBox x:Name="VcLatencyCombo"
+                        DockPanel.Dock="Right"
+                        Width="116">
+                <ComboBoxItem Content="100 ms" Tag="100"/>
+                <ComboBoxItem Content="150 ms" Tag="150"/>
+                <ComboBoxItem Content="200 ms" Tag="200"/>
+                <ComboBoxItem Content="300 ms" Tag="300"/>
+              </ComboBox>
+            </DockPanel>
+          </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2"
+                Style="{StaticResource ElevatedPanel}"
+                Padding="14"
+                Margin="0,0,0,16">
+          <StackPanel>
+            <TextBlock Text="診断" Style="{StaticResource PanelTitle}" Margin="0,0,0,10"/>
+            <UniformGrid Columns="2">
+              <Button Content="テストトーン"
+                      Style="{StaticResource SecondaryButton}"
+                      Height="34"
+                      Margin="0,0,6,0"
+                      Click="TestTone_Click"/>
+              <Button Content="無音ストリーム"
+                      Style="{StaticResource SecondaryButton}"
+                      Height="34"
+                      Margin="6,0,0,0"
+                      Click="SilenceTest_Click"/>
+            </UniformGrid>
+          </StackPanel>
+        </Border>
+
+        <TextBlock Grid.Row="3"
+                   Text="メーター感度は表示だけに反映され、実際の音量やVC出力には影響しません。VC出力レイテンシは次回の送出開始から反映されます。"
                    Style="{StaticResource MutedText}"
                    TextWrapping="Wrap"/>
 
-        <StackPanel Grid.Row="2"
+        <StackPanel Grid.Row="4"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Margin="0,18,0,0">

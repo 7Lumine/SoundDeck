@@ -145,6 +145,8 @@ public partial class MainWindow : Window
         {
             Owner = this
         };
+        dialog.TestToneRequested += SettingsDialog_TestToneRequested;
+        dialog.SilenceTestRequested += SettingsDialog_SilenceTestRequested;
 
         if (dialog.ShowDialog() != true)
         {
@@ -154,11 +156,57 @@ public partial class MainWindow : Window
         _settings.MicMeterSensitivity = dialog.MicMeterSensitivity;
         _settings.ClipsMeterSensitivity = dialog.ClipsMeterSensitivity;
         _settings.OutputMeterSensitivity = dialog.OutputMeterSensitivity;
+        _settings.VcOutputLatencyMilliseconds = dialog.VcOutputLatencyMilliseconds;
+        _engine.OutputLatencyMilliseconds = _settings.VcOutputLatencyMilliseconds;
         _displayedMicLevel = 0;
         _displayedClipsLevel = 0;
         _displayedOutputLevel = 0;
         SaveSettings();
         SetStatus("Settings saved", TopStatusText.Text);
+    }
+
+    private void SettingsDialog_TestToneRequested(object? sender, EventArgs e)
+    {
+        RunOutputDiagnostic(tone: true, sender is SettingsDialog dialog ? dialog.VcOutputLatencyMilliseconds : null);
+    }
+
+    private void SettingsDialog_SilenceTestRequested(object? sender, EventArgs e)
+    {
+        RunOutputDiagnostic(tone: false, sender is SettingsDialog dialog ? dialog.VcOutputLatencyMilliseconds : null);
+    }
+
+    private void RunOutputDiagnostic(bool tone, int? latencyMilliseconds)
+    {
+        if (OutputDeviceCombo?.SelectedItem is not AudioDeviceInfo output)
+        {
+            SetStatus("Select VC output first", "Error");
+            return;
+        }
+
+        var latency = latencyMilliseconds ?? _settings.VcOutputLatencyMilliseconds;
+        SetStatus(tone ? "Test tone running for 5 seconds" : "Silence stream test running for 5 seconds", TopStatusText.Text);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (tone)
+                {
+                    await VoicePipeEngine.RunDiagnosticToneAsync(output.DeviceNumber, latency).ConfigureAwait(false);
+                }
+                else
+                {
+                    await VoicePipeEngine.RunDiagnosticSilenceAsync(output.DeviceNumber, latency).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    SetStatus("Diagnostic output failed", "Error");
+                    MessageBox.Show(this, ex.Message, "SoundDeck", MessageBoxButton.OK, MessageBoxImage.Warning);
+                });
+            }
+        });
     }
 
     private void UpdateMaximizeRestoreButton()
@@ -469,6 +517,7 @@ public partial class MainWindow : Window
 
         try
         {
+            _engine.OutputLatencyMilliseconds = _settings.VcOutputLatencyMilliseconds;
             _engine.Start(input.DeviceNumber, output.DeviceNumber);
             ApplyAudioOptions();
             SaveSettings();

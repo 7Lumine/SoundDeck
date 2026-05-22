@@ -15,6 +15,7 @@ public partial class SettingsDialog : Window
         MicMeterSlider.Value = NormalizeSensitivity(settings.MicMeterSensitivity);
         ClipsMeterSlider.Value = NormalizeSensitivity(settings.ClipsMeterSensitivity);
         OutputMeterSlider.Value = NormalizeSensitivity(settings.OutputMeterSensitivity);
+        SelectLatency(settings.VcOutputLatencyMilliseconds);
         _isLoading = false;
         UpdateValueText();
     }
@@ -22,6 +23,9 @@ public partial class SettingsDialog : Window
     public double MicMeterSensitivity => MicMeterSlider.Value;
     public double ClipsMeterSensitivity => ClipsMeterSlider.Value;
     public double OutputMeterSensitivity => OutputMeterSlider.Value;
+    public int VcOutputLatencyMilliseconds => GetSelectedLatency();
+    public event EventHandler? TestToneRequested;
+    public event EventHandler? SilenceTestRequested;
 
     private void MeterSlider_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
@@ -43,7 +47,18 @@ public partial class SettingsDialog : Window
         MicMeterSlider.Value = 1.0;
         ClipsMeterSlider.Value = 1.0;
         OutputMeterSlider.Value = 1.0;
+        SelectLatency(200);
         UpdateValueText();
+    }
+
+    private void TestTone_Click(object sender, RoutedEventArgs e)
+    {
+        TestToneRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SilenceTest_Click(object sender, RoutedEventArgs e)
+    {
+        SilenceTestRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
@@ -76,5 +91,38 @@ public partial class SettingsDialog : Window
         }
 
         return Math.Clamp(value, 0.5, 4.0);
+    }
+
+    private void SelectLatency(int latencyMilliseconds)
+    {
+        var normalized = NormalizeLatency(latencyMilliseconds);
+        foreach (var item in VcLatencyCombo.Items.OfType<ComboBoxItem>())
+        {
+            if (int.TryParse(item.Tag?.ToString(), out var value) && value == normalized)
+            {
+                VcLatencyCombo.SelectedItem = item;
+                return;
+            }
+        }
+
+        VcLatencyCombo.SelectedIndex = 2;
+    }
+
+    private int GetSelectedLatency()
+    {
+        if (VcLatencyCombo.SelectedItem is ComboBoxItem item &&
+            int.TryParse(item.Tag?.ToString(), out var value))
+        {
+            return NormalizeLatency(value);
+        }
+
+        return 200;
+    }
+
+    private static int NormalizeLatency(int latencyMilliseconds)
+    {
+        return latencyMilliseconds is 100 or 150 or 200 or 300
+            ? latencyMilliseconds
+            : 200;
     }
 }
