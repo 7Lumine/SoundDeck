@@ -1,141 +1,129 @@
 # SoundDeck
 
-SoundDeck is a Windows desktop soundboard and microphone mixer for Discord and other voice chat apps.
+SoundDeck は、Discord などのボイスチャット向けに、マイク音声と MP3 クリップをミックスして流すための Windows デスクトップアプリです。
 
-It mixes your microphone with MP3 clips and sends the result to a virtual audio device such as VB-CABLE or SteelSeries Sonar.
+SoundDeck は Discord に直接音声を注入するアプリではありません。VB-CABLE や SteelSeries Sonar などの仮想オーディオデバイスへ音声を出力し、Discord 側ではその録音デバイスを入力として選びます。
 
-## What It Does
+## 主な機能
 
-- Mixes microphone audio and MP3 clips
-- Plays multiple clips at the same time
-- Supports per-clip play, stop, seek, volume, loop, pin, rename, and hotkey settings
-- Supports microphone ducking while clips are playing
-- Supports monitor output for checking MP3-only or mixed audio locally
-- Saves devices, volume, clips, names, hotkeys, and settings
+- マイク音声と MP3 クリップのミックス
+- 複数 MP3 の同時再生
+- クリップごとの再生、停止、シーク、音量、ループ、ピン留め、名前変更
+- クリップごとのグローバルホットキー設定
+- MP3 再生中だけマイク音量を下げるダッキング
+- MP3のみ / ミックス音声のモニター出力
+- デバイス、音量、クリップ名、ホットキー、各種設定の保存
 
-SoundDeck does not inject audio directly into Discord. It outputs audio to a Windows playback device. For Discord, use a virtual audio cable and select its recording side as the Discord input device.
+## 必要なもの
 
-## Requirements
-
-- Windows 10 or Windows 11
+- Windows 10 / Windows 11
 - [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-- A virtual audio device, for example:
+- 仮想オーディオデバイス
   - [VB-CABLE](https://vb-audio.com/Cable/)
   - SteelSeries Sonar
-  - VoiceMeeter
+  - VoiceMeeter など
 
-The simplest setup is VB-CABLE.
+一番シンプルなのは VB-CABLE を使う構成です。
 
-## Download And Run
+## ダウンロードと起動
 
-1. Download `SoundDeck-0.1.1-win-x64.zip` from the latest GitHub Release.
-2. Extract the zip file to any folder.
-3. Run `SoundDeck.exe`.
+1. GitHub Releases から `SoundDeck-0.1.1-win-x64.zip` をダウンロードします。
+2. zip を任意のフォルダへ展開します。
+3. 展開したフォルダ内の `SoundDeck.exe` を起動します。
 
-Do not run only the `.exe` after moving it somewhere else. SoundDeck currently needs the files next to it, including `SoundDeck.dll`, `SoundDeck.runtimeconfig.json`, and `NAudio.*.dll`.
+`SoundDeck.exe` だけを別の場所へ移動して起動しないでください。現在の配布形式では、同じフォルダ内の `SoundDeck.dll`、`SoundDeck.runtimeconfig.json`、`NAudio.*.dll` なども必要です。
 
-## VB-CABLE Setup
+## VB-CABLE での使い方
 
-1. Install VB-CABLE.
-2. Start SoundDeck.
-3. In SoundDeck, set:
-   - `マイク`: your normal microphone
+1. VB-CABLE をインストールします。
+2. SoundDeck を起動します。
+3. SoundDeck 側で以下を選びます。
+   - `マイク`: 普段使っているマイク
    - `VC出力`: `CABLE Input`
-4. In Discord, set:
-   - Input device: `CABLE Output`
-5. Press `送出開始` in SoundDeck.
-6. Add MP3 clips and play them from the soundboard.
+4. Discord 側で以下を選びます。
+   - 入力デバイス: `CABLE Output`
+5. SoundDeck の `送出開始` を押します。
+6. MP3 を追加して、Soundboard から再生します。
 
-The route is:
+音声の流れは以下のようになります。
 
 ```text
-Microphone + MP3 clips
+マイク + MP3
   -> SoundDeck
   -> CABLE Input
   -> CABLE Output
-  -> Discord / OBS / voice chat app
+  -> Discord / ボイスチャットアプリ
 ```
 
-## Recommended Discord Settings
+## Discord 側のおすすめ設定
 
-If clips sound too quiet, cut off, or distorted in Discord, try:
+MP3 が小さくなる、途切れる、不自然に変化する場合は、Discord 側で以下を調整してください。
 
-- Turn off or reduce noise suppression
-- Disable automatic input sensitivity and set it manually
-- Disable echo cancellation if it affects clip playback
-- Disable automatic gain control if the volume pumps up and down
+- 入力感度を自動ではなく手動にする
+- ノイズ抑制を弱める、または無効にする
+- エコー除去を必要に応じて無効にする
+- 自動ゲイン制御を必要に応じて無効にする
 
-## OBS Test
+## トラブルシューティング
 
-To test without Discord:
+### アプリが起動しない
 
-1. Set SoundDeck `VC出力` to `CABLE Input`.
-2. In OBS, add an audio input capture source.
-3. Select `CABLE Output`.
-4. Start SoundDeck pipe and play a clip.
-
-If OBS records clean audio, SoundDeck and VB-CABLE are working and any remaining issue is likely in the voice chat app settings.
-
-## Troubleshooting
-
-### The App Does Not Start
-
-Install the .NET 8 Desktop Runtime:
+.NET 8 Desktop Runtime をインストールしてください。
 
 https://dotnet.microsoft.com/download/dotnet/8.0
 
-If you downloaded a zip, extract it first. Running from inside the zip preview can fail.
+zip の中から直接起動せず、必ず展開してから `SoundDeck.exe` を起動してください。
 
-### Sound Is Crackling Or Cutting Out
+### 音がプツプツする / 途切れる
 
-Open `設定` in SoundDeck and try increasing `VC出力` latency:
+SoundDeck の `設定` を開き、`VC出力` のレイテンシを上げてください。
 
-- Start with `200 ms`
-- If it still crackles, try `300 ms`
+- まずは `200 ms`
+- まだ不安定なら `300 ms`
 
-Also make sure Windows, VB-CABLE, and SoundDeck are using 48 kHz where possible.
+また、Windows 側の音声デバイス、VB-CABLE、SoundDeck のサンプルレートを可能な範囲で 48 kHz に揃えてください。
 
-### I Cannot Hear The MP3 Locally
+### 自分のPCでMP3音声を確認したい
 
-Use the `モニター` section:
+右側の `モニター` を使ってください。
 
-- `MP3`: hear only MP3 clips
-- `Mix`: hear microphone + MP3 mix
+- `MP3`: MP3 だけを聞く
+- `Mix`: マイク + MP3 のミックスを聞く
 
-Do not set monitor output to the same device as VC output unless you know what you are doing.
+モニター出力とVC出力を同じデバイスにすると、二重再生やハウリングの原因になる場合があります。
 
-### Discord Receives No Audio
+### Discord に音が入らない
 
-Check the device pairing:
+以下の組み合わせになっているか確認してください。
 
-- SoundDeck `VC出力`: `CABLE Input`
-- Discord input device: `CABLE Output`
+- SoundDeck の `VC出力`: `CABLE Input`
+- Discord の入力デバイス: `CABLE Output`
 
-Also make sure `送出開始` is active.
+また、SoundDeck の `送出開始` が有効になっているか確認してください。
 
-## Where Files Are Stored
+## ファイルの保存場所
 
-SoundDeck copies added clips into:
+追加した MP3 は以下へコピーされます。
 
 ```text
 %AppData%\SoundDeck\Clips
 ```
 
-Settings are stored in:
+設定ファイルは以下に保存されます。
 
 ```text
 %AppData%\SoundDeck\settings.json
 ```
 
-Diagnostic logs are written to:
+診断ログは以下に保存されます。
 
 ```text
 %AppData%\SoundDeck\sounddeck.log
 ```
 
-## Build From Source
+## ソースからビルドする場合
 
-For development, install the .NET 8 SDK and run:
+開発する場合は .NET 8 SDK をインストールして、以下を実行してください。
 
 ```powershell
 dotnet restore .\SoundDeck.sln
@@ -143,14 +131,14 @@ dotnet build .\SoundDeck.sln
 dotnet run --project .\src\VoicePipe\SoundDeck.csproj
 ```
 
-To publish a local build:
+ローカルで配布用フォルダを作る場合:
 
 ```powershell
 dotnet publish .\src\VoicePipe\SoundDeck.csproj -c Release -o .\artifacts\SoundDeck-win-x64
 ```
 
-## Notes
+## 注意
 
-- Ask for permission before playing audio into a shared voice chat.
-- SoundDeck currently depends on external virtual audio devices such as VB-CABLE.
-- A future version may provide a more integrated output path, but the current 0.1.x line is designed around VB-CABLE/Sonar-style routing.
+- VC に音声を流す前に、相手や参加している場所のルールを確認してください。
+- 現在の SoundDeck は VB-CABLE / Sonar などの外部仮想オーディオデバイスを前提にしています。
+- 将来的にはより統合された出力方式を検討できますが、0.1.x 系は仮想オーディオデバイス経由の運用を前提にしています。
