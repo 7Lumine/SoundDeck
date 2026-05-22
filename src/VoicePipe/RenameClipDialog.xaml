@@ -1,0 +1,102 @@
+<Window x:Class="VoicePipe.RenameClipDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="クリップ名変更"
+        Width="390"
+        MinHeight="210"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackgroundBrush}">
+  <shell:WindowChrome.WindowChrome>
+    <shell:WindowChrome CaptionHeight="42"
+                        ResizeBorderThickness="0"
+                        GlassFrameThickness="0"
+                        CornerRadius="0"
+                        UseAeroCaptionButtons="False"/>
+  </shell:WindowChrome.WindowChrome>
+
+  <Border Background="{StaticResource PanelBackgroundBrush}"
+          BorderBrush="{StaticResource BorderBrushDefault}"
+          BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="42"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+
+      <Grid Grid.Row="0"
+            Background="{StaticResource WindowBackgroundBrush}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0"
+                   Text="クリップ名変更"
+                   FontWeight="SemiBold"
+                   VerticalAlignment="Center"
+                   Margin="18,0,0,0"/>
+        <Button Grid.Column="1"
+                Style="{StaticResource WindowCloseButton}"
+                Click="CloseDialog_Click"
+                ToolTip="閉じる"
+                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+          <Viewbox Width="11" Height="11">
+            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                  StrokeThickness="1.4"
+                  StrokeStartLineCap="Round"
+                  StrokeEndLineCap="Round"
+                  Data="M 2 2 L 10 10 M 10 2 L 2 10"/>
+          </Viewbox>
+        </Button>
+      </Grid>
+
+      <Grid Grid.Row="1" Margin="20">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="クリップ名"
+                   Style="{StaticResource PanelTitle}"
+                   Margin="0,0,0,8"/>
+
+        <TextBox Grid.Row="1"
+                 x:Name="NameBox"
+                 Height="42"
+                 Padding="12,4"
+                 VerticalContentAlignment="Center"
+                 MaxLength="120"/>
+
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,18,0,0">
+          <Button Content="キャンセル"
+                  Style="{StaticResource SecondaryButton}"
+                  Width="96"
+                  Height="36"
+                  MinHeight="36"
+                  Padding="10,4"
+                  Margin="0,0,8,0"
+                  IsCancel="True"
+                  Click="Cancel_Click"/>
+          <Button Content="保存"
+                  Style="{StaticResource PrimaryButton}"
+                  Width="82"
+                  Height="36"
+                  MinHeight="36"
+                  Padding="10,4"
+                  FontSize="13"
+                  IsDefault="True"
+                  Click="Ok_Click"/>
+        </StackPanel>
+      </Grid>
+    </Grid>
+  </Border>
+</Window>
