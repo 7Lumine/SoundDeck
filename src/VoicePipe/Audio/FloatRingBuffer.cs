@@ -74,6 +74,22 @@ internal sealed class FloatRingBuffer
         }
     }
 
+    public void TrimTo(int maxAvailable)
+    {
+        lock (_gate)
+        {
+            maxAvailable = Math.Max(0, maxAvailable);
+            if (_available <= maxAvailable)
+            {
+                return;
+            }
+
+            var drop = _available - maxAvailable;
+            _readIndex = (_readIndex + drop) % _buffer.Length;
+            _available = maxAvailable;
+        }
+    }
+
     private void EnsureCapacity(int incomingCount)
     {
         if (incomingCount <= _buffer.Length)

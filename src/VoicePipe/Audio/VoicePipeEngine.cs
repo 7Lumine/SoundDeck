@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
@@ -11,7 +12,12 @@ public sealed class VoicePipeEngine : IDisposable
     private const int CaptureBitsPerSample = 16;
     private const int CaptureChannels = 1;
     private const int OutputChannels = 2;
-    private const int BufferMilliseconds = 20;
+    private const int DefaultCaptureBufferMilliseconds = 20;
+    private const int LowLatencyCaptureBufferMilliseconds = 10;
+    private const int DefaultCaptureBufferCount = 4;
+    private const int LowLatencyCaptureBufferCount = 3;
+    private const int DefaultMicQueueMilliseconds = 100;
+    private const int LowLatencyMicQueueMilliseconds = 40;
 
     private static readonly WaveFormat CaptureFormat = new(SampleRate, CaptureBitsPerSample, CaptureChannels);
     private static readonly WaveFormat OutputPcmFormat = new(SampleRate, 16, OutputChannels);
@@ -23,15 +29,15 @@ public sealed class VoicePipeEngine : IDisposable
     private readonly FloatRingBuffer _micRing = new(SampleRate * 2);
 
     private WaveInEvent? _microphone;
-    private WaveOutEvent? _output;
+    private IWavePlayer? _output;
     private SoundDeckMixerSampleProvider? _mainMixer;
-    private WaveOutEvent? _monitorOutput;
+    private IWavePlayer? _monitorOutput;
     private BufferedWaveProvider? _monitorBuffer;
     private float[] _captureSampleBuffer = Array.Empty<float>();
     private byte[] _monitorByteBuffer = Array.Empty<byte>();
     private AudioLevels _levels;
     private MonitorMode _monitorMode;
-    private int _monitorDeviceNumber = -1;
+    private AudioDeviceInfo? _monitorDevice;
     private float _monitorVolume = 0.5f;
 
     public float MicVolume { get; set; } = 1.0f;
@@ -41,6 +47,7 @@ public sealed class VoicePipeEngine : IDisposable
     public bool MicMuted { get; set; }
     public bool DuckingEnabled { get; set; }
     public int OutputLatencyMilliseconds { get; set; } = 200;
+    public bool LowLatencyMode { get; set; }
     public bool IsRunning => _microphone is not null && _output is not null;
 
     public event EventHandler<ClipPlaybackEndedEventArgs>? ClipPlaybackEnded;
@@ -56,30 +63,29 @@ public sealed class VoicePipeEngine : IDisposable
         }
     }
 
-    public void Start(int inputDeviceNumber, int outputDeviceNumber)
+    public void Start(int inputDeviceNumber, AudioDeviceInfo outputDevice)
     {
         Stop();
         _micRing.Clear();
 
         _mainMixer = new SoundDeckMixerSampleProvider(this, SampleRate);
-        _output = new WaveOutEvent
-        {
-            DeviceNumber = outputDeviceNumber,
-            DesiredLatency = NormalizeLatency(OutputLatencyMilliseconds)
-        };
+        var captureBufferMilliseconds = LowLatencyMode ? LowLatencyCaptureBufferMilliseconds : DefaultCaptureBufferMilliseconds;
+        var captureBufferCount = LowLatencyMode ? LowLatencyCaptureBufferCount : DefaultCaptureBufferCount;
+        var outputLatency = NormalizeLatency(OutputLatencyMilliseconds);
+        _output = CreateWasapiOutput(outputDevice, outputLatency);
         _output.Init(new SampleToWaveProvider16(_mainMixer));
 
         _microphone = new WaveInEvent
         {
             DeviceNumber = inputDeviceNumber,
             WaveFormat = CaptureFormat,
-            BufferMilliseconds = BufferMilliseconds,
-            NumberOfBuffers = 4
+            BufferMilliseconds = captureBufferMilliseconds,
+            NumberOfBuffers = captureBufferCount
         };
         _microphone.DataAvailable += Microphone_DataAvailable;
         _microphone.RecordingStopped += Microphone_RecordingStopped;
 
-        Log($"VC output start: device={outputDeviceNumber}, engine=WaveOutEvent, sampleRate={SampleRate}, channels={OutputChannels}, internal=float32, outputFormat={OutputPcmFormat}, latencyMs={_output.DesiredLatency}, continuousStream=true, mixerReadFully=true");
+        Log($"VC output start: device={outputDevice.Name}, engine=WasapiOutShared, sampleRate={SampleRate}, channels={OutputChannels}, internal=float32, outputFormat={OutputPcmFormat}, latencyMs={outputLatency}, lowLatencyMode={LowLatencyMode}, captureBufferMs={captureBufferMilliseconds}, captureBuffers={captureBufferCount}, micMaxQueueMs={GetMicQueueMilliseconds()}, continuousStream=true, mixerReadFully=true");
         _output.Play();
         StartMonitorIfNeeded();
         _microphone.StartRecording();
@@ -106,15 +112,15 @@ public sealed class VoicePipeEngine : IDisposable
         Log("VC output stop");
     }
 
-    public void ConfigureMonitor(MonitorMode mode, int deviceNumber, float volume)
+    public void ConfigureMonitor(MonitorMode mode, AudioDeviceInfo? device, float volume)
     {
         lock (_monitorGate)
         {
             var normalizedVolume = ClampGain(volume);
-            var shouldRestart = _monitorDeviceNumber != deviceNumber;
+            var shouldRestart = !IsSameDevice(_monitorDevice, device);
             var wasDisabled = _monitorMode == MonitorMode.None;
             _monitorMode = mode;
-            _monitorDeviceNumber = deviceNumber;
+            _monitorDevice = device;
             _monitorVolume = normalizedVolume;
 
             if (_monitorMode == MonitorMode.None)
@@ -235,18 +241,19 @@ public sealed class VoicePipeEngine : IDisposable
         }
     }
 
-    public static async Task RunDiagnosticToneAsync(int outputDeviceNumber, int latencyMilliseconds, CancellationToken cancellationToken = default)
+    public static async Task RunDiagnosticToneAsync(AudioDeviceInfo outputDevice, int latencyMilliseconds, CancellationToken cancellationToken = default)
     {
-        await RunDiagnosticSignalAsync(outputDeviceNumber, latencyMilliseconds, tone: true, cancellationToken).ConfigureAwait(false);
+        await RunDiagnosticSignalAsync(outputDevice, latencyMilliseconds, tone: true, cancellationToken).ConfigureAwait(false);
     }
 
-    public static async Task RunDiagnosticSilenceAsync(int outputDeviceNumber, int latencyMilliseconds, CancellationToken cancellationToken = default)
+    public static async Task RunDiagnosticSilenceAsync(AudioDeviceInfo outputDevice, int latencyMilliseconds, CancellationToken cancellationToken = default)
     {
-        await RunDiagnosticSignalAsync(outputDeviceNumber, latencyMilliseconds, tone: false, cancellationToken).ConfigureAwait(false);
+        await RunDiagnosticSignalAsync(outputDevice, latencyMilliseconds, tone: false, cancellationToken).ConfigureAwait(false);
     }
 
     internal int ReadMicSamples(float[] buffer, int offset, int count)
     {
+        _micRing.TrimTo(GetMicQueueSampleCount());
         return _micRing.Read(buffer, offset, count);
     }
 
@@ -269,7 +276,6 @@ public sealed class VoicePipeEngine : IDisposable
                     playback.Dispose();
                     endedPlaybackIds ??= new List<Guid>();
                     endedPlaybackIds.Add(playback.Id);
-                    Log($"Clip natural end: id={playback.Id}, activeInputs={_activeClips.Count}, vcOutputRecreated=false");
                     continue;
                 }
 
@@ -375,14 +381,11 @@ public sealed class VoicePipeEngine : IDisposable
             DiscardOnBufferOverflow = true
         };
 
-        _monitorOutput = new WaveOutEvent
-        {
-            DeviceNumber = _monitorDeviceNumber,
-            DesiredLatency = 120
-        };
+        var latency = LowLatencyMode ? 80 : 120;
+        _monitorOutput = CreateWasapiOutput(_monitorDevice, latency);
         _monitorOutput.Init(_monitorBuffer);
         _monitorOutput.Play();
-        Log($"Monitor start: mode={_monitorMode}, device={_monitorDeviceNumber}, format={OutputPcmFormat}");
+        Log($"Monitor start: mode={_monitorMode}, device={_monitorDevice?.Name ?? "default"}, engine=WasapiOutShared, latencyMs={latency}, format={OutputPcmFormat}");
     }
 
     private void StopMonitorOutput()
@@ -453,25 +456,45 @@ public sealed class VoicePipeEngine : IDisposable
 
     private static int NormalizeLatency(int latencyMilliseconds)
     {
-        return latencyMilliseconds is 100 or 150 or 200 or 300
+        return latencyMilliseconds is 50 or 80 or 100 or 150 or 200 or 300
             ? latencyMilliseconds
             : 200;
     }
 
-    private static async Task RunDiagnosticSignalAsync(int outputDeviceNumber, int latencyMilliseconds, bool tone, CancellationToken cancellationToken)
+    private static async Task RunDiagnosticSignalAsync(AudioDeviceInfo outputDevice, int latencyMilliseconds, bool tone, CancellationToken cancellationToken)
     {
-        using var output = new WaveOutEvent
-        {
-            DeviceNumber = outputDeviceNumber,
-            DesiredLatency = NormalizeLatency(latencyMilliseconds)
-        };
+        var normalizedLatency = NormalizeLatency(latencyMilliseconds);
+        using var output = CreateWasapiOutput(outputDevice, normalizedLatency);
         var provider = new DiagnosticSignalSampleProvider(tone, SampleRate, OutputChannels);
         output.Init(new SampleToWaveProvider16(provider));
-        Log($"Diagnostic {(tone ? "tone" : "silence")} start: device={outputDeviceNumber}, sampleRate={SampleRate}, channels={OutputChannels}, latencyMs={output.DesiredLatency}");
+        Log($"Diagnostic {(tone ? "tone" : "silence")} start: device={outputDevice.Name}, engine=WasapiOutShared, sampleRate={SampleRate}, channels={OutputChannels}, latencyMs={normalizedLatency}");
         output.Play();
         await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
         output.Stop();
         Log($"Diagnostic {(tone ? "tone" : "silence")} stop");
+    }
+
+    private int GetMicQueueMilliseconds() => LowLatencyMode ? LowLatencyMicQueueMilliseconds : DefaultMicQueueMilliseconds;
+
+    private int GetMicQueueSampleCount() => SampleRate * GetMicQueueMilliseconds() / 1000;
+
+    private static WasapiOut CreateWasapiOutput(AudioDeviceInfo? device, int latencyMilliseconds)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var endpoint = string.IsNullOrWhiteSpace(device?.DeviceId)
+            ? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)
+            : enumerator.GetDevice(device.DeviceId);
+        return new WasapiOut(endpoint, AudioClientShareMode.Shared, true, latencyMilliseconds);
+    }
+
+    private static bool IsSameDevice(AudioDeviceInfo? first, AudioDeviceInfo? second)
+    {
+        if (!string.IsNullOrWhiteSpace(first?.DeviceId) && !string.IsNullOrWhiteSpace(second?.DeviceId))
+        {
+            return string.Equals(first.DeviceId, second.DeviceId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return first?.DeviceNumber == second?.DeviceNumber;
     }
 
     private static void Log(string message)

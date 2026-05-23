@@ -16,6 +16,7 @@ public partial class SettingsDialog : Window
         ClipsMeterSlider.Value = NormalizeSensitivity(settings.ClipsMeterSensitivity);
         OutputMeterSlider.Value = NormalizeSensitivity(settings.OutputMeterSensitivity);
         SelectLatency(settings.VcOutputLatencyMilliseconds);
+        LowLatencyModeCheck.IsChecked = settings.LowLatencyMode;
         _isLoading = false;
         UpdateValueText();
     }
@@ -24,6 +25,7 @@ public partial class SettingsDialog : Window
     public double ClipsMeterSensitivity => ClipsMeterSlider.Value;
     public double OutputMeterSensitivity => OutputMeterSlider.Value;
     public int VcOutputLatencyMilliseconds => GetSelectedLatency();
+    public bool LowLatencyMode => LowLatencyModeCheck.IsChecked == true;
     public event EventHandler? TestToneRequested;
     public event EventHandler? SilenceTestRequested;
 
@@ -42,12 +44,30 @@ public partial class SettingsDialog : Window
         UpdateValueText();
     }
 
+    private void LowLatencyMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isLoading)
+        {
+            return;
+        }
+
+        if (LowLatencyModeCheck.IsChecked == true && GetSelectedLatency() > 80)
+        {
+            SelectLatency(80);
+        }
+        else if (LowLatencyModeCheck.IsChecked != true && GetSelectedLatency() < 100)
+        {
+            SelectLatency(200);
+        }
+    }
+
     private void Reset_Click(object sender, RoutedEventArgs e)
     {
         MicMeterSlider.Value = 1.0;
         ClipsMeterSlider.Value = 1.0;
         OutputMeterSlider.Value = 1.0;
         SelectLatency(200);
+        LowLatencyModeCheck.IsChecked = false;
         UpdateValueText();
     }
 
@@ -105,7 +125,7 @@ public partial class SettingsDialog : Window
             }
         }
 
-        VcLatencyCombo.SelectedIndex = 2;
+        VcLatencyCombo.SelectedIndex = 4;
     }
 
     private int GetSelectedLatency()
@@ -121,7 +141,7 @@ public partial class SettingsDialog : Window
 
     private static int NormalizeLatency(int latencyMilliseconds)
     {
-        return latencyMilliseconds is 100 or 150 or 200 or 300
+        return latencyMilliseconds is 50 or 80 or 100 or 150 or 200 or 300
             ? latencyMilliseconds
             : 200;
     }

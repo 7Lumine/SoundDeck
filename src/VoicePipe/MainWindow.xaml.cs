@@ -157,7 +157,9 @@ public partial class MainWindow : Window
         _settings.ClipsMeterSensitivity = dialog.ClipsMeterSensitivity;
         _settings.OutputMeterSensitivity = dialog.OutputMeterSensitivity;
         _settings.VcOutputLatencyMilliseconds = dialog.VcOutputLatencyMilliseconds;
+        _settings.LowLatencyMode = dialog.LowLatencyMode;
         _engine.OutputLatencyMilliseconds = _settings.VcOutputLatencyMilliseconds;
+        _engine.LowLatencyMode = _settings.LowLatencyMode;
         _displayedMicLevel = 0;
         _displayedClipsLevel = 0;
         _displayedOutputLevel = 0;
@@ -191,11 +193,11 @@ public partial class MainWindow : Window
             {
                 if (tone)
                 {
-                    await VoicePipeEngine.RunDiagnosticToneAsync(output.DeviceNumber, latency).ConfigureAwait(false);
+                    await VoicePipeEngine.RunDiagnosticToneAsync(output, latency).ConfigureAwait(false);
                 }
                 else
                 {
-                    await VoicePipeEngine.RunDiagnosticSilenceAsync(output.DeviceNumber, latency).ConfigureAwait(false);
+                    await VoicePipeEngine.RunDiagnosticSilenceAsync(output, latency).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -262,7 +264,9 @@ public partial class MainWindow : Window
             for (var index = 0; index < comboBox.Items.Count; index++)
             {
                 if (comboBox.Items[index] is AudioDeviceInfo device &&
-                    string.Equals(device.Name, selection.Name, StringComparison.OrdinalIgnoreCase))
+                    ((!string.IsNullOrWhiteSpace(selection.DeviceId) &&
+                      string.Equals(device.DeviceId, selection.DeviceId, StringComparison.OrdinalIgnoreCase)) ||
+                     string.Equals(device.Name, selection.Name, StringComparison.OrdinalIgnoreCase)))
                 {
                     comboBox.SelectedIndex = index;
                     return true;
@@ -518,7 +522,8 @@ public partial class MainWindow : Window
         try
         {
             _engine.OutputLatencyMilliseconds = _settings.VcOutputLatencyMilliseconds;
-            _engine.Start(input.DeviceNumber, output.DeviceNumber);
+            _engine.LowLatencyMode = _settings.LowLatencyMode;
+            _engine.Start(input.DeviceNumber, output);
             ApplyAudioOptions();
             SaveSettings();
             UpdateRouteDisplay();
@@ -732,16 +737,16 @@ public partial class MainWindow : Window
         }
 
         var mode = GetSelectedMonitorMode();
-        var outputDeviceNumber = (MonitorOutputCombo.SelectedItem as AudioDeviceInfo)?.DeviceNumber ?? -1;
+        var outputDevice = MonitorOutputCombo.SelectedItem as AudioDeviceInfo;
         var volume = (float)(MonitorVolumeSlider.Value / 100.0);
 
         try
         {
-            _engine.ConfigureMonitor(mode, outputDeviceNumber, volume);
+            _engine.ConfigureMonitor(mode, outputDevice, volume);
         }
         catch (Exception ex)
         {
-            _engine.ConfigureMonitor(MonitorMode.None, outputDeviceNumber, 0);
+            _engine.ConfigureMonitor(MonitorMode.None, outputDevice, 0);
             var wasLoadingSettings = _isLoadingSettings;
             _isLoadingSettings = true;
             SelectMonitorMode(MonitorMode.None);
@@ -794,12 +799,14 @@ public partial class MainWindow : Window
         {
             _settings.Microphone.DeviceNumber = input.DeviceNumber;
             _settings.Microphone.Name = input.Name;
+            _settings.Microphone.DeviceId = input.DeviceId;
         }
 
         if (OutputDeviceCombo.SelectedItem is AudioDeviceInfo output)
         {
             _settings.VcOutput.DeviceNumber = output.DeviceNumber;
             _settings.VcOutput.Name = output.Name;
+            _settings.VcOutput.DeviceId = output.DeviceId;
         }
 
         _settings.MicrophoneVolume = MicVolumeSlider.Value;
@@ -813,6 +820,7 @@ public partial class MainWindow : Window
         {
             _settings.MonitorOutput.DeviceNumber = monitorOutput.DeviceNumber;
             _settings.MonitorOutput.Name = monitorOutput.Name;
+            _settings.MonitorOutput.DeviceId = monitorOutput.DeviceId;
         }
 
         _settings.Clips = Clips
@@ -978,8 +986,18 @@ public partial class MainWindow : Window
         var sameDevice = monitorMode != MonitorMode.None &&
                          vcOutput is not null &&
                          monitorOutput is not null &&
-                         vcOutput.DeviceNumber == monitorOutput.DeviceNumber;
+                         IsSameOutputDevice(vcOutput, monitorOutput);
         MonitorWarningText.Visibility = sameDevice ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static bool IsSameOutputDevice(AudioDeviceInfo first, AudioDeviceInfo second)
+    {
+        if (!string.IsNullOrWhiteSpace(first.DeviceId) && !string.IsNullOrWhiteSpace(second.DeviceId))
+        {
+            return string.Equals(first.DeviceId, second.DeviceId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return first.DeviceNumber == second.DeviceNumber;
     }
 
     private void UiTimer_Tick(object? sender, EventArgs e)

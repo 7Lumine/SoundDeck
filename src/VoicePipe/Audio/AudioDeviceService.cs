@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using NAudio.CoreAudioApi;
 
 namespace VoicePipe.Audio;
 
@@ -20,15 +21,21 @@ public sealed class AudioDeviceService
     public IReadOnlyList<AudioDeviceInfo> GetOutputDevices(bool includeDefaultDevice = false)
     {
         var devices = new List<AudioDeviceInfo>();
+        using var enumerator = new MMDeviceEnumerator();
+
         if (includeDefaultDevice)
         {
-            devices.Add(new AudioDeviceInfo(-1, "既定の再生デバイス"));
+            var defaultDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            devices.Add(new AudioDeviceInfo(-1, "既定の再生デバイス", defaultDevice.ID));
         }
 
-        for (var index = 0; index < WaveOut.DeviceCount; index++)
+        var endpoints = enumerator
+            .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+            .ToList();
+        for (var index = 0; index < endpoints.Count; index++)
         {
-            var caps = WaveOut.GetCapabilities(index);
-            devices.Add(new AudioDeviceInfo(index, caps.ProductName));
+            var endpoint = endpoints[index];
+            devices.Add(new AudioDeviceInfo(index, endpoint.FriendlyName, endpoint.ID));
         }
 
         return devices;

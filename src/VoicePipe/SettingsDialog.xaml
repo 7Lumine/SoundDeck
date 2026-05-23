@@ -143,12 +143,24 @@
               <ComboBox x:Name="VcLatencyCombo"
                         DockPanel.Dock="Right"
                         Width="116">
+                <ComboBoxItem Content="50 ms" Tag="50"/>
+                <ComboBoxItem Content="80 ms" Tag="80"/>
                 <ComboBoxItem Content="100 ms" Tag="100"/>
                 <ComboBoxItem Content="150 ms" Tag="150"/>
                 <ComboBoxItem Content="200 ms" Tag="200"/>
                 <ComboBoxItem Content="300 ms" Tag="300"/>
               </ComboBox>
             </DockPanel>
+            <CheckBox x:Name="LowLatencyModeCheck"
+                      Content="低遅延モード"
+                      Margin="0,12,0,0"
+                      Checked="LowLatencyMode_Changed"
+                      Unchecked="LowLatencyMode_Changed"
+                      ToolTip="マイク入力バッファを短くします。環境によってはプツプツしやすくなる場合があります。"/>
+            <TextBlock Text="不安定な場合はOFFにして、レイテンシを200msまたは300msへ戻してください。"
+                       Style="{StaticResource MutedText}"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"/>
           </StackPanel>
         </Border>
 
