@@ -699,7 +699,7 @@
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="サンプルレート: 48 kHz" Style="{StaticResource MutedText}"/>
           <TextBlock Text="|" Style="{StaticResource MutedText}" Margin="12,0"/>
-          <TextBlock Text="バージョン: 0.1.1" Style="{StaticResource MutedText}"/>
+          <TextBlock Text="バージョン: 0.1.2" Style="{StaticResource MutedText}"/>
           <TextBlock Text="|" Style="{StaticResource MutedText}" Margin="12,0"/>
           <TextBlock Text="フィードバック" Style="{StaticResource MutedText}"/>
         </StackPanel>
